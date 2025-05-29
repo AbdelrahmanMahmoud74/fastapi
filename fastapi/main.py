@@ -1,34 +1,33 @@
-from fastapi import FastAPI, Request, Form
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from typing import List
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
+
+from ultralytics import YOLO
+import shutil
+import uuid
+import os
+import download
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+model = YOLO("yolo/best.pt")  # تأكد أن الموديل هنا هو نفس اللي كنت بتجربه يدويًا
 
-class TodoItem(BaseModel):
-    id: int
-    task: str
-    completed: bool = False
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-todos: List[TodoItem] = []
-id_counter = 1
+@app.post("/detect_image")
+async def detect_and_return_image(image: UploadFile = File(...)):
+    file_ext = image.filename.split(".")[-1]
+    filename = f"{uuid.uuid4()}.{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, filename)
 
-@app.get("/")
-async def get_todos(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "todos": todos})
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(image.file, buffer)
 
-@app.post("/add")
-async def create_todo(task: str = Form(...)):
-    global id_counter
-    todo = TodoItem(id=id_counter, task=task)
-    id_counter += 1
-    todos.append(todo)
-    return RedirectResponse(url="/", status_code=303)
+    # Run detection and save image with bounding boxes
+    results = model.predict(file_path, save=True, save_txt=False)
 
-@app.post("/delete/{todo_id}")
-async def delete_todo(todo_id: int):
-    global todos
-    todos = [todo for todo in todos if todo.id != todo_id]
-    return RedirectResponse(url="/", status_code=303)
+    # Get saved image path from ultralytics (saved in runs/detect/)
+    saved_dir = results[0].save_dir
+    result_image_path = os.path.join(saved_dir, filename)
+
+    return FileResponse(result_image_path, media_type="image/jpeg")
